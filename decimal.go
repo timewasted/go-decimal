@@ -85,8 +85,7 @@ func ParseDecimal(s string) (*Decimal, error) {
 			denominatorDigits++
 		}
 		newN := *n*10 + uint64(v)
-		// FIXME: I'm pretty sure newN can never be > maxUnsignedInt64.
-		if newN < *n || newN > maxUnsignedInt64 {
+		if newN < *n {
 			return nil, rangeError(fnName, s)
 		}
 		*n = newN
@@ -94,6 +93,9 @@ func ParseDecimal(s string) (*Decimal, error) {
 	}
 
 	if decimal.Valid {
+		if decimal.numerator == 0 && decimal.denominator == 0 && decimal.Negative {
+			decimal.Negative = false
+		}
 		if denominatorDigits != -1 {
 			decimal.denominatorDigits = denominatorDigits
 		}
@@ -140,53 +142,114 @@ func (d1 *Decimal) Add(d2 *Decimal) error {
 	}
 
 	// Bounds checking.
-	// FIXME: I'm pretty sure newV can never be > maxUnsignedInt64.
-	newV := d1.denominator + d2.denominator
-	if newV < d1.denominator || newV > maxUnsignedInt64 {
+	if d1.denominator+d2.denominator < d1.denominator {
 		return rangeError("Add", d1.String()+" + "+d2.String())
 	}
-	newV = d1.numerator + d2.numerator
-	if newV < d1.numerator || newV > maxUnsignedInt64 {
+	if d1.numerator+d2.numerator < d1.numerator {
 		return rangeError("Add", d1.String()+" + "+d2.String())
 	}
+
+	// Work on a copy until we're sure that d1 doesn't overflow.
+	d1copy := *d1
 
 	// Ensure equal "length" denominators.
 	d2Denominator := d2.denominator
-	if d1.denominatorDigits > d2.denominatorDigits {
-		d2Denominator *= uint64(math.Pow10(d1.denominatorDigits - d2.denominatorDigits))
-	} else if d2.denominatorDigits > d1.denominatorDigits {
-		d1.denominator *= uint64(math.Pow10(d2.denominatorDigits - d1.denominatorDigits))
-		d1.denominatorDigits = d2.denominatorDigits
+	d2DenomDigits := d2.denominatorDigits
+	if d1copy.denominatorDigits > d2.denominatorDigits {
+		d2Denominator *= uint64(math.Pow10(d1copy.denominatorDigits - d2.denominatorDigits))
+		d2DenomDigits = d1copy.denominatorDigits
+	} else if d2.denominatorDigits > d1copy.denominatorDigits {
+		d1copy.denominator *= uint64(math.Pow10(d2.denominatorDigits - d1copy.denominatorDigits))
+		d1copy.denominatorDigits = d2.denominatorDigits
 	}
 
-	if d1.Negative == d2.Negative {
-		d1.denominator += d2Denominator
-		d1.numerator += d2.numerator
+	if d1copy.Negative == d2.Negative {
+		d1copy.denominator += d2Denominator
+		d1copy.numerator += d2.numerator
+
+		// Perform a carry, if needed.
+		d1DigitsNew := printedLength(d1copy.denominator)
+		if d1DigitsNew > d2DenomDigits {
+			mod := uint64(math.Pow10(d1copy.denominatorDigits))
+			d1Numerator := d1copy.numerator
+			d1copy.numerator += d1copy.denominator / mod
+			d1copy.denominator %= mod
+
+			// Check for overflow via carry.
+			if d1copy.numerator < d1Numerator {
+				return rangeError("Add", d1.String()+" + "+d2.String())
+			}
+		}
 	} else {
-		n1, n2 := d1.Negative, d2.Negative
-		d1.Negative, d2.Negative = false, false
+		neg1, neg2 := d1copy.Negative, d2.Negative
+		d1copy.Negative, d2.Negative = false, false
+		if d1copy.Cmp(d2) >= 0 {
+			d1copy.denominator -= d2Denominator
+			d1copy.numerator -= d2.numerator
+		} else {
+			d1copy.denominator = d2Denominator - d1copy.denominator
+			d1copy.numerator = d2.numerator - d1copy.numerator
+			neg1 = !neg1
+		}
+		d1copy.Negative, d2.Negative = neg1, neg2
+	}
+
+	// Zero is not negative.
+	if d1copy.numerator == 0 && d1copy.denominator == 0 && d1copy.Negative {
+		d1copy.Negative = false
+	}
+
+	// Simplify the number, and set d1 to d1copy.
+	d1copy.denominator, d1copy.denominatorDigits = simplifyNumber(d1copy.denominator)
+	*d1 = d1copy
+	return nil
+}
+
+// Sub sets d1 to the result of d1-d2. An error is returned if either d1 or d2
+// are flagged as being invalid, or if the operation would result in d1
+// overflowing. d1 is unchanged on error.
+func (d1 *Decimal) Sub(d2 *Decimal) error {
+	if !d1.Valid || !d2.Valid {
+		return ErrNotValid
+	}
+
+	if !d1.Negative && !d2.Negative {
+		// Ensure equal "length" denominators.
+		d2Denominator := d2.denominator
+		if d1.denominatorDigits > d2.denominatorDigits {
+			d2Denominator *= uint64(math.Pow10(d1.denominatorDigits - d2.denominatorDigits))
+		} else if d2.denominatorDigits > d1.denominatorDigits {
+			d1.denominator *= uint64(math.Pow10(d2.denominatorDigits - d1.denominatorDigits))
+			d1.denominatorDigits = d2.denominatorDigits
+		}
+
 		if d1.Cmp(d2) >= 0 {
-			d1.denominator -= d2Denominator
+			d1Denominator := d1.denominator
+			d1.denominator -= d2.denominator
 			d1.numerator -= d2.numerator
+
+			// Borrow from the numerator if the denominator underflows.
+			if d1.denominator > d1Denominator {
+				d1.denominator = uint64(math.Pow10(d1.denominatorDigits)) - (maxUnsignedInt64 - d1.denominator) - 1
+				d1.numerator--
+			}
 		} else {
 			d1.denominator = d2Denominator - d1.denominator
 			d1.numerator = d2.numerator - d1.numerator
-			n1 = !n1
+			d1.Negative = !d1.Negative
 		}
-		d1.Negative, d2.Negative = n1, n2
+
+		d1.denominator, d1.denominatorDigits = simplifyNumber(d1.denominator)
+	} else {
+		d2Neg := d2.Negative
+		d2.Negative = d1.Negative
+		err := d1.Add(d2)
+		d2.Negative = d2Neg
+		if err != nil {
+			return err
+		}
 	}
 
-	// Perform a carry, if needed.
-	d1DigitsNew := printedLength(d1.denominator)
-	if d1DigitsNew > d2.denominatorDigits {
-		mod := uint64(math.Pow10(d1.denominatorDigits))
-		d1.numerator += d1.denominator / mod
-		d1.denominator %= mod
-	}
-
-	// Simplify d1 after performing the carry.
-	d1.denominator, d1DigitsNew = simplifyNumber(d1.denominator)
-	d1.denominatorDigits = d1DigitsNew
 	return nil
 }
 

@@ -33,7 +33,7 @@ fmt.Println(decimal.String())
 Current limitations:
 --------------------
 
-* Aside from parsing and printing, the only operations currently implemented are `Cmp` and `Add`. More operations will be added in time, and of course pull requests are welcomed!
+* Aside from parsing and printing, the only operations currently implemented are `Cmp`, `Add`, and `Sub`. More operations will be added in time, and of course pull requests are welcomed!
 * `ParseDecimal` does not parse "formatted" values, such as what `FormattedString` would return. This is unlikely to change.
 
 License:

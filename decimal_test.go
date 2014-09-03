@@ -32,6 +32,13 @@ func TestParseDecimal(t *testing.T) {
 			},
 		},
 		{
+			description: "Negative zero",
+			input:       "-0.0",
+			result: testResult{
+				output: "0.0",
+			},
+		},
+		{
 			description: "No decimal point or denominator (positive value)",
 			input:       "123",
 			result: testResult{
@@ -488,17 +495,83 @@ func TestCmp(t *testing.T) {
 	}
 }
 
-func TestAdd(t *testing.T) {
-	type testResult struct {
-		shouldFail, negative bool
-		output               string
-	}
-	type addTest struct {
-		description, input1, input2 string
-		result                      testResult
+type testResult struct {
+	shouldFail, negative bool
+	output               string
+}
+type operationTest struct {
+	description, input1, input2 string
+	result                      testResult
+}
+
+func testOperation(t *testing.T, tests []operationTest, op string) {
+	var debugOp string
+	switch op {
+	case "+":
+		debugOp = "adding"
+	case "-":
+		debugOp = "subtracting"
+	default:
+		t.Fatalf("Unsupported operation '%s'.", op)
 	}
 
-	tests := []addTest{
+	for _, test := range tests {
+		d1, err := ParseDecimal(test.input1)
+		if err != nil {
+			t.Errorf("%s (input '%s'): expected success, received error '%v'.", test.description, test.input1, err)
+			continue
+		}
+		d2, err := ParseDecimal(test.input2)
+		if err != nil {
+			t.Errorf("%s (input '%s'): expected success, received error '%v'.", test.description, test.input2, err)
+			continue
+		}
+
+		switch op {
+		case "+":
+			err = d1.Add(d2)
+		case "-":
+			err = d1.Sub(d2)
+		}
+		if err != nil {
+			if !test.result.shouldFail {
+				t.Errorf("%s (%s '%s' and '%s'): expected success, received error '%v'.", test.description, debugOp, test.input1, test.input2, err)
+			}
+			continue
+		}
+		if test.result.shouldFail {
+			t.Errorf("%s (%s '%s' and '%s'): expected failure.", test.description, debugOp, test.input1, test.input2)
+			continue
+		}
+		if test.result.negative && !d1.Negative {
+			t.Errorf("%s (%s '%s' and '%s'): expected negative value.", test.description, debugOp, test.input1, test.input2)
+		} else if !test.result.negative && d1.Negative {
+			t.Errorf("%s (%s '%s' and '%s'): expected positive value.", test.description, debugOp, test.input1, test.input2)
+		}
+		if test.result.output != d1.String() {
+			t.Errorf("%s (%s '%s' and '%s'): expected '%s', received '%s'.", test.description, debugOp, test.input1, test.input2, test.result.output, d1.String())
+		}
+	}
+}
+
+func TestAdd(t *testing.T) {
+	tests := []operationTest{
+		{
+			description: "Positive plus negative, result is zero",
+			input1:      "111.111",
+			input2:      "-111.111",
+			result: testResult{
+				output: "0.0",
+			},
+		},
+		{
+			description: "Negative plus positive, result is zero",
+			input1:      "-111.111",
+			input2:      "111.111",
+			result: testResult{
+				output: "0.0",
+			},
+		},
 		{
 			description: "Positive plus positive, sign stays the same",
 			input1:      "111.111",
@@ -670,9 +743,33 @@ func TestAdd(t *testing.T) {
 			},
 		},
 		{
+			description: "Erroneous carry that would lead to a divide by zero panic",
+			input1:      "0.17446744073709551615",
+			input2:      "0.01",
+			result: testResult{
+				output: "0.18446744073709551615",
+			},
+		},
+		{
+			description: "Erroneous carry that would lead to a divide by zero panic",
+			input1:      "0.18446744073709551615",
+			input2:      "0.0",
+			result: testResult{
+				output: "0.18446744073709551615",
+			},
+		},
+		{
 			description: "Bounds checking the numerator",
+			input1:      "18446744073709551615.0",
+			input2:      "1.0",
+			result: testResult{
+				shouldFail: true,
+			},
+		},
+		{
+			description: "Bounds checking the numerator via carry",
 			input1:      "18446744073709551615.5",
-			input2:      "18446744073709551615.5",
+			input2:      "0.5",
 			result: testResult{
 				shouldFail: true,
 			},
@@ -687,38 +784,114 @@ func TestAdd(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
-		d1, err := ParseDecimal(test.input1)
-		if err != nil {
-			t.Errorf("%s (input '%s'): expected success, received error '%v'.", test.description, test.input1, err)
-			continue
-		}
-		d2, err := ParseDecimal(test.input2)
-		if err != nil {
-			t.Errorf("%s (input '%s'): expected success, received error '%v'.", test.description, test.input2, err)
-			continue
-		}
+	testOperation(t, tests, "+")
+}
 
-		err = d1.Add(d2)
-		if err != nil {
-			if !test.result.shouldFail {
-				t.Errorf("%s (adding '%s' and '%s'): expected success, received error '%v'.", test.description, test.input1, test.input2, err)
-			}
-			continue
-		}
-		if test.result.shouldFail {
-			t.Errorf("%s (adding '%s' and '%s'): expected failure.", test.description, test.input1, test.input2)
-			continue
-		}
-		if test.result.negative && !d1.Negative {
-			t.Errorf("%s (adding '%s' and '%s'): expected negative value.", test.description, test.input1, test.input2)
-		} else if !test.result.negative && d1.Negative {
-			t.Errorf("%s (adding '%s' and '%s'): expected positive value.", test.description, test.input1, test.input2)
-		}
-		if test.result.output != d1.String() {
-			t.Errorf("%s (adding '%s' and '%s'): expected '%s', received '%s'.", test.description, test.input1, test.input2, test.result.output, d1.String())
-		}
+func TestSub(t *testing.T) {
+	tests := []operationTest{
+		{
+			description: "Positive minus positive, result is zero",
+			input1:      "222.222",
+			input2:      "222.222",
+			result: testResult{
+				output: "0.0",
+			},
+		},
+		{
+			description: "Positive minus positive, signs stay the same",
+			input1:      "222.222",
+			input2:      "111.111",
+			result: testResult{
+				output: "111.111",
+			},
+		},
+		{
+			description: "Negative minus negative, signs stay the same",
+			input1:      "-222.222",
+			input2:      "-111.111",
+			result: testResult{
+				negative: true,
+				output:   "-333.333",
+			},
+		},
+		{
+			description: "Positive minus negative, signs stay the same",
+			input1:      "222.222",
+			input2:      "-111.111",
+			result: testResult{
+				output: "333.333",
+			},
+		},
+		{
+			description: "Negative minus positive, signs stay the same",
+			input1:      "-222.222",
+			input2:      "111.111",
+			result: testResult{
+				negative: true,
+				output:   "-333.333",
+			},
+		},
+		{
+			description: "Positive minus positive, sign becomes negative",
+			input1:      "111.111",
+			input2:      "222.222",
+			result: testResult{
+				negative: true,
+				output:   "-111.111",
+			},
+		},
+		{
+			description: "Positive minus positive, uneven length denominators",
+			input1:      "222.222",
+			input2:      "111.111999",
+			result: testResult{
+				output: "111.110001",
+			},
+		},
+		{
+			description: "Positive minus positive, uneven length denominators",
+			input1:      "111.111999",
+			input2:      "222.222",
+			result: testResult{
+				negative: true,
+				output:   "-111.110001",
+			},
+		},
+		{
+			description: "Positive minus positive, denominator borrows from numerator",
+			input1:      "111.111",
+			input2:      "0.999",
+			result: testResult{
+				output: "110.112",
+			},
+		},
+		{
+			description: "Bounds checking the numerator",
+			input1:      "-18446744073709551615.0",
+			input2:      "-1.0",
+			result: testResult{
+				shouldFail: true,
+			},
+		},
+		{
+			description: "Bounds checking the numerator via carry",
+			input1:      "-18446744073709551615.5",
+			input2:      "-0.5",
+			result: testResult{
+				shouldFail: true,
+			},
+		},
+		{
+			description: "Bounds checking the denominator",
+			input1:      "-0.18446744073709551615",
+			input2:      "-0.00000000000000000001",
+			result: testResult{
+				shouldFail: true,
+			},
+		},
 	}
+
+	testOperation(t, tests, "-")
 }
 
 func TestFormattedString(t *testing.T) {
@@ -755,6 +928,28 @@ func TestFormattedString(t *testing.T) {
 		}
 		if decimal.FormattedString() != output {
 			t.Errorf("'%s': Expected '%s', received '%s'.", input, output, decimal.FormattedString())
+		}
+	}
+}
+
+func BenchmarkAdd(b *testing.B) {
+	b.ReportAllocs()
+	d1, _ := ParseDecimal("123456789.012345")
+	d2, _ := ParseDecimal("8675309.1337")
+	for i := 0; i < b.N; i++ {
+		if err := d1.Add(d2); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSub(b *testing.B) {
+	b.ReportAllocs()
+	d1, _ := ParseDecimal("123456789.012345")
+	d2, _ := ParseDecimal("8675309.1337")
+	for i := 0; i < b.N; i++ {
+		if err := d1.Sub(d2); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
