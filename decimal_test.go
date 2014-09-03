@@ -931,25 +931,3 @@ func TestFormattedString(t *testing.T) {
 		}
 	}
 }
-
-func BenchmarkAdd(b *testing.B) {
-	b.ReportAllocs()
-	d1, _ := ParseDecimal("123456789.012345")
-	d2, _ := ParseDecimal("8675309.1337")
-	for i := 0; i < b.N; i++ {
-		if err := d1.Add(d2); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkSub(b *testing.B) {
-	b.ReportAllocs()
-	d1, _ := ParseDecimal("123456789.012345")
-	d2, _ := ParseDecimal("8675309.1337")
-	for i := 0; i < b.N; i++ {
-		if err := d1.Sub(d2); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
